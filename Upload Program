@@ -1,0 +1,253 @@
+*&---------------------------------------------------------------------*
+*& Report ZUPLOADTEST
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT ZUPLOADTEST.
+
+*&---------------------------------------------------------------------*
+*& Report ZUPLOAD
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+*REPORT ZUPLOAD.
+
+
+
+
+*— Selection Screen
+PARAMETERS: p_table TYPE dd02l-tabname OBLIGATORY.
+PARAMETERS: p_file LIKE rlgrap-filename OBLIGATORY MEMORY ID ysm.
+
+
+
+*— Declarations for dynamic data
+DATA gt_data TYPE REF TO data.
+DATA GS_DATA TYPE REF TO data.
+
+FIELD-SYMBOLS: <ft_data> TYPE STANDARD TABLE,
+<FS_DATA> TYPE ANY.
+
+
+
+*— Declarations for Result Count
+DATA: GV_SUCCESS TYPE I,
+GV_ERROR   TYPE I.
+
+
+
+*— Declaration for factory ALV
+data: gr_table type ref to cl_salv_table.
+
+*— File Open Dialog
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_file.
+PERFORM f4_file_name.
+
+
+
+*— Validate table name
+AT SELECTION-SCREEN ON p_table.
+
+PERFORM f_validate_table.
+
+
+
+START-OF-SELECTION.
+
+
+
+*— Create dynamic internal table
+CREATE DATA gt_data TYPE TABLE OF (p_table).
+ASSIGN gt_data->* TO <ft_data>.
+
+
+
+*— Create dynamic work area
+CREATE DATA gs_data TYPE (p_table).
+ASSIGN gs_data->* TO <fs_data>.
+
+
+
+*— Get Excel data in internal table
+PERFORM f_convert_excel.
+
+
+
+*— Upload data to database table
+PERFORM f_upload_table.
+
+
+
+END-OF-SELECTION.
+
+*— Create Factory ALV and display result
+PERFORM f_show_result.
+
+
+
+
+
+*&———————————————————————*
+*&      Form  F4_FILE_NAME
+*&———————————————————————*
+*       text
+*———————————————————————-*
+*  –>  p1        text
+*  <–  p2        text
+*———————————————————————-*
+FORM f4_file_name .
+CALL FUNCTION 'KD_GET_FILENAME_ON_F4'
+* EXPORTING
+*   PROGRAM_NAME        = SYST-REPID
+*   DYNPRO_NUMBER       = SYST-DYNNR
+*   FIELD_NAME          = ' '
+*   STATIC              = ' '
+*   MASK                = ' '
+*   FILEOPERATION       = 'R'
+*   PATH                =
+CHANGING
+file_name           = p_file
+*   LOCATION_FLAG       = 'P'
+* EXCEPTIONS
+*   MASK_TOO_LONG       = 1
+*   OTHERS              = 2
+.
+IF sy-subrc <> 0.
+
+MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+ENDIF.
+
+ENDFORM.
+
+*&———————————————————————*
+*&      Form  F_VALIDATE_TABLE
+*&———————————————————————*
+*       text
+*———————————————————————-*
+*  –>  p1        text
+*  <–  p2        text
+*———————————————————————-*
+FORM F_VALIDATE_TABLE .
+DATA LV_TABNAME TYPE DD02L-TABNAME.
+
+
+
+*— Upload only Tables in customer namespace
+IF p_table+0(1) NE 'Z' AND p_table+0(1) NE 'Y'.
+MESSAGE 'Only tables in customer namespace can be uploaded' TYPE 'E'.
+ENDIF.
+
+
+
+*— Only transparent tables can be uploaded
+SELECT SINGLE tabname
+FROM DD02L
+INTO lv_tabname
+where tabname = p_table and
+tabclass = 'TRANSP'.
+IF sy-subrc NE 0.
+MESSAGE 'Only transparent tables can be uploaded' TYPE 'E'.
+ENDIF.
+ENDFORM.
+
+*&———————————————————————*
+*&      Form  F_CONVERT_EXCEL
+*&———————————————————————*
+*       text
+*———————————————————————-*
+*  –>  p1        text
+*  <–  p2        text
+*———————————————————————-*
+FORM f_convert_excel .
+DATA lt_raw_data  TYPE truxs_t_text_data.
+
+CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+EXPORTING
+*     I_FIELD_SEPERATOR    =
+i_line_header        = 'X'
+i_tab_raw_data       = lt_raw_data
+i_filename           = P_file
+TABLES
+i_tab_converted_data = <FT_DATA>
+
+EXCEPTIONS
+conversion_failed    = 1
+OTHERS               = 2.
+
+
+
+IF sy-subrc <> 0.
+
+MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+
+WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+
+ENDIF.
+
+
+
+ENDFORM.
+
+*&———————————————————————*
+*&      Form  upload_data
+*&———————————————————————*
+*       text
+*———————————————————————-*
+
+
+FORM f_upload_table.
+
+SET UPDATE TASK LOCAL.   " Switch to local update
+
+
+
+LOOP AT <ft_data> ASSIGNING <fs_data>.
+
+MODIFY (P_TABLE) FROM <FS_DATA>.
+
+IF SY-SUBRC = 0.
+
+GV_SUCCESS = GV_SUCCESS + 1.
+
+ELSE.
+
+delete <ft_data> index sy-tabix.
+
+GV_ERROR = GV_ERROR + 1.
+
+ENDIF.
+
+ENDLOOP.
+
+
+
+ENDFORM.                    "upload_data
+
+*&———————————————————————*
+*&      Form  f_show_result
+*&———————————————————————*
+*       text
+*———————————————————————-*
+FORM f_show_result.
+*— Create Instance
+
+CALL METHOD CL_SALV_TABLE=>FACTORY
+
+IMPORTING
+
+R_SALV_TABLE = GR_TABLE
+
+CHANGING
+
+T_TABLE      = <FT_DATA>. "” Only entries which are updated successfully
+
+
+
+*— Display ALV \Output
+gr_table->display( ).
+write: 'No. of records successfully uploaded' , GV_SUCCESS.
+
+write: 'No. of records unable to upload' , GV_ERROR.
+
+ENDFORM.                    "f_show_result
